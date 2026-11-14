@@ -12,7 +12,8 @@ in both directions, with the Home Assistant → phone direction working as an
 - **HA → phone (intercom):** Home Assistant places a call to the `asterisk.local`
   VoIP endpoint; Asterisk rings the Yealink with an intercom header so the phone
   **auto-answers on speaker** and plays HA's announcement (e.g. "Internet is
-  down") without anyone picking up the handset.
+  down") without anyone picking up the handset — then the call is dropped by the
+  `S(8)` Dial option (see below).
 
 ## How It's Built
 
@@ -51,6 +52,26 @@ Also note: **do not `Answer()` in `[from_homeassistant]` before the `Dial()`**.
 If Asterisk answers HA's leg first, HA starts streaming TTS into a channel with
 no second leg up and the beginning of the announcement is dropped. Letting
 `Dial()` answer when the phone answers keeps the audio intact.
+
+## Hanging up after the announcement
+
+HA's VoIP satellite never ends the call by itself: `assist_satellite.announce`
+loops the message until the phone hangs up, and `start_conversation` listens
+until the phone hangs up — and an auto-answering intercom does neither. There is
+no `assist_satellite` stop/hangup service (only `announce`, `start_conversation`,
+`ask_question`).
+
+So the call is capped on the Asterisk side with `Dial`'s `S(x)` option (hang up
+`x` seconds after the called party answers):
+
+```
+same => n,Dial(PJSIP/yealink,30,S(8)b(intercom^s^1))
+```
+
+Set `x` to comfortably exceed the announcement length. When Asterisk hangs up,
+HA's SIP leg gets a BYE and the service call returns cleanly. Keep
+`start_conversation` (not `announce`) for a single one-way message — `announce`
+repeats until the cap.
 
 ## Deploy
 
