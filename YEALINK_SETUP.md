@@ -24,6 +24,38 @@ Phone will register with Asterisk and display **Registered** status.
 
 Now when you pick up the handset, it will automatically dial Home Assistant after 4 seconds.
 
+## Auto Answer (required for the HA → phone intercom)
+
+So Home Assistant announcements auto-answer on the speaker instead of just ringing:
+
+1. Go to **Account** → **Account 1** → **Advanced** (or **Account** → **Codec/Advanced**).
+2. Enable **Auto Answer** (a.k.a. "Auto Answer" / intercom auto-answer).
+   - In a config file this is `account.1.auto_answer = 1`.
+3. **Confirm**.
+
+The phone still only auto-answers when the incoming INVITE carries the intercom
+header that Asterisk injects (`Alert-Info: info=alert-autoanswer`, see
+`configs/extensions.conf` → `[intercom]`). Normal calls still ring.
+
+If your firmware exposes it, the relevant Yealink header values the phone honours
+for hands-free answer are any of:
+
+```
+Alert-Info: auto answer
+Alert-Info: info=alert-autoanswer
+Alert-Info: alert-autoanswer ;info=alert-autoanswer
+Alert-Info: answer-after=0
+Call-Info: ;answer-after=0
+```
+
+## Codecs
+
+Make sure **OPUS** is enabled and, ideally, first in the codec list — Home
+Assistant Voice uses opus. (Account → Codec.) This is separate from the intercom
+issue above; opus is not the reason a call fails to ring.
+
 ## That's It
 
-Pick up the phone and talk to Home Assistant.
+- Pick up the phone and talk to Home Assistant.
+- Have Home Assistant call the phone (e.g. an automation) and it answers on
+  speaker as an intercom.
