@@ -99,8 +99,13 @@ exten => asterisk,1,Page(PJSIP/yealink&PJSIP/yealink2,b(intercom^s^1))
 ```
 
 (Page answers the HA leg immediately, so the first fraction of a second of TTS
-can be clipped as the phones join — fine for paging, less so for a long
-announcement.)
+can be clipped as the phones join — and, critically, **Page/ConfBridge must
+transcode opus↔slin to mix**. Asterisk ships only `res_format_attr_opus`
+(passthrough) by default; without `codec_opus` the page dies with
+`No translator path (slin)->(opus)` and nothing rings. Check with
+`asterisk -rx 'core show translation paths opus'` — if every line reads
+*No Translation Path*, `Page` cannot work until `codec_opus` is installed or
+built. A plain `Dial(A&B)` bridge is pure passthrough and needs no translator.)
 
 ## Deploy
 
