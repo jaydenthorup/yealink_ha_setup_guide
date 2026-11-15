@@ -73,6 +73,35 @@ HA's SIP leg gets a BYE and the service call returns cleanly. Keep
 `start_conversation` (not `announce`) for a single one-way message — `announce`
 repeats until the cap.
 
+## Two phones (ring group)
+
+Add one `[yealinkN]` endpoint block per extra phone in `pjsip.conf` — its own
+auth and AOR, and the **AOR name must differ from the first phone's** (two
+phones cannot share one AOR while `remove_existing=yes`, or they evict each
+other). Give each phone `context=from_yealink` so it can also dial the
+assistant (hotline 100 → HA).
+
+`[from_homeassistant]` then rings all of them:
+
+```
+exten => asterisk,1,Dial(PJSIP/yealink&PJSIP/yealink2,30,S(8)b(intercom^s^1))
+ same => n,HangUp()
+```
+
+`Dial(A&B)` rings **both** and connects the **first** to answer. That is a ring
+group. For true simultaneous paging, where every phone plays the announcement
+at once, use `Page()` instead — it bridges all answering channels into one
+conference with the caller:
+
+```
+exten => asterisk,1,Page(PJSIP/yealink&PJSIP/yealink2,b(intercom^s^1))
+ same => n,HangUp()
+```
+
+(Page answers the HA leg immediately, so the first fraction of a second of TTS
+can be clipped as the phones join — fine for paging, less so for a long
+announcement.)
+
 ## Deploy
 
 1. Backup your current configs:

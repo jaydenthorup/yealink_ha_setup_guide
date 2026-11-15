@@ -54,6 +54,18 @@ Make sure **OPUS** is enabled and, ideally, first in the codec list — Home
 Assistant Voice uses opus. (Account → Codec.) This is separate from the intercom
 issue above; opus is not the reason a call fails to ring.
 
+## Adding a second phone
+
+Repeat the above on the second phone, but give it the credentials that match its
+own `[yealinkN]` block in `pjsip.conf` — e.g. **SIP User ID** and
+**Authenticate User ID** `yealink2`, password `password123`, server = the same
+Asterisk IP. Each phone **must use a different account name**: two phones sharing
+one AOR with `remove_existing=yes` will evict each other's registration (the
+classic "only one phone ever works" symptom).
+
+Same hotline (100), Auto Answer, and OPUS settings as the first phone. Both
+phones then ring for HA announcements, and both can dial the assistant.
+
 ## That's It
 
 - Pick up the phone and talk to Home Assistant.
