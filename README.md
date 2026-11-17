@@ -73,7 +73,7 @@ HA's SIP leg gets a BYE and the service call returns cleanly. Keep
 `start_conversation` (not `announce`) for a single one-way message — `announce`
 repeats until the cap.
 
-## Two phones (ring group)
+## Two phones — simultaneous intercom page
 
 Add one `[yealinkN]` endpoint block per extra phone in `pjsip.conf` — its own
 auth and AOR, and the **AOR name must differ from the first phone's** (two
@@ -81,31 +81,56 @@ phones cannot share one AOR while `remove_existing=yes`, or they evict each
 other). Give each phone `context=from_yealink` so it can also dial the
 assistant (hotline 100 → HA).
 
-`[from_homeassistant]` then rings all of them:
+To make **both phones play the announcement at once**, use `Page()` in
+`[from_homeassistant]` — it bridges every answering channel into one conference
+with the caller:
 
 ```
-exten => asterisk,1,Dial(PJSIP/yealink&PJSIP/yealink2,30,S(8)b(intercom^s^1))
+exten => asterisk,1,Set(TIMEOUT(absolute)=8)
+ same => n,Page(PJSIP/yealink&PJSIP/yealink2,qb(intercom^s^1))
  same => n,HangUp()
 ```
 
-`Dial(A&B)` rings **both** and connects the **first** to answer. That is a ring
-group. For true simultaneous paging, where every phone plays the announcement
-at once, use `Page()` instead — it bridges all answering channels into one
-conference with the caller:
+- `q` suppresses Page's beep — without it you get
+  `Unable to open beep (format (opus))`.
+- `TIMEOUT(absolute)` caps the call: `Page` has no `S(x)` like `Dial`, and HA's
+  satellite never ends the call itself. **It is a duration in seconds, not an
+  epoch** — `$[${EPOCH}+8]` looks right but never fires, and the call hangs open.
+- A plain `Dial(A&B)` also "works" but connects only the **first** phone to
+  answer — use it only for a *ring group*, not a page.
 
-```
-exten => asterisk,1,Page(PJSIP/yealink&PJSIP/yealink2,b(intercom^s^1))
- same => n,HangUp()
+### Prerequisite: codec_opus (Page must mix opus↔slin)
+
+Page/ConfBridge transcode to `slin` to mix. A stock Asterisk ships only
+`res_format_attr_opus` (passthrough), so Page dies silently with
+`No translator path (slin)->(opus)`. Verify:
+
+```bash
+asterisk -rx 'core show translation paths opus'   # all "No Translation Path" = broken
 ```
 
-(Page answers the HA leg immediately, so the first fraction of a second of TTS
-can be clipped as the phones join — and, critically, **Page/ConfBridge must
-transcode opus↔slin to mix**. Asterisk ships only `res_format_attr_opus`
-(passthrough) by default; without `codec_opus` the page dies with
-`No translator path (slin)->(opus)` and nothing rings. Check with
-`asterisk -rx 'core show translation paths opus'` — if every line reads
-*No Translation Path*, `Page` cannot work until `codec_opus` is installed or
-built. A plain `Dial(A&B)` bridge is pure passthrough and needs no translator.)
+Install the official Digium module (Asterisk 22 example):
+
+```bash
+cd /tmp
+curl -sLO https://downloads.digium.com/pub/telephony/codec_opus/asterisk-22.0/x86-64/codec_opus-22.0-current-x86_64.tar.gz
+tar -xzf codec_opus-22.0-current-x86_64.tar.gz
+cp codec_opus-22.0_*/codec_opus.so                       /usr/lib/asterisk/modules/
+cp codec_opus-22.0_*/codec_opus_config-en_US.xml         /var/lib/asterisk/documentation/thirdparty/
+systemctl restart asterisk
+```
+
+**The restart is required.** Asterisk reads third-party XML docs only at
+startup — `xmldoc reload` will *not* pick up a newly added file, and without it
+the module fails with `Could not obtain XML documentation item for config type
+opus`. The prebuilt module's ABI matches a source-built 22.x (it reaches module
+init), so no rebuild is needed.
+
+Watch the LSB init script: `systemctl restart asterisk` can report success while
+the old daemon survives (`Unit process NNN remains running after unit stopped`)
+and the ctl socket disappears. If `asterisk -rx` then says "Unable to connect",
+do `pkill -x asterisk; sleep 3; systemctl stop asterisk; systemctl start asterisk`.
+
 
 ## Deploy
 
