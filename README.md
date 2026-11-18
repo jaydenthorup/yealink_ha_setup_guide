@@ -73,7 +73,7 @@ HA's SIP leg gets a BYE and the service call returns cleanly. Keep
 `start_conversation` (not `announce`) for a single one-way message — `announce`
 repeats until the cap.
 
-## Two phones — simultaneous intercom page
+## Two phones
 
 Add one `[yealinkN]` endpoint block per extra phone in `pjsip.conf` — its own
 auth and AOR, and the **AOR name must differ from the first phone's** (two
@@ -81,50 +81,83 @@ phones cannot share one AOR while `remove_existing=yes`, or they evict each
 other). Give each phone `context=from_yealink` so it can also dial the
 assistant (hotline 100 → HA).
 
-To make **both phones play the announcement at once**, use `Page()` in
-`[from_homeassistant]` — it bridges every answering channel into one conference
-with the caller:
+### One HA call reaches exactly ONE phone
+
+Home Assistant's VoIP satellite holds **one** call. Two consequences, both
+verified the hard way:
+
+- `Dial(PJSIP/a&PJSIP/b)` rings both but connects only the **first** to answer,
+  so only one phone speaks.
+- **Chaining** two `Dial()`s in a single call does not work either: as soon as
+  the first phone's media stops, HA's `voip_utils` tears its *own* call down (a
+  ~2s RTP watchdog), so the second `Dial()` has no caller left.
+
+So the automation fires the announcement **once per phone**:
+
+```yaml
+  actions:
+  - action: assist_satellite.start_conversation
+    data: {start_message: "Internet is Down"}
+    target: {entity_id: assist_satellite.asterisk_local}
+  - action: assist_satellite.start_conversation   # 2nd call = 2nd phone
+    data: {start_message: "Internet is Down"}
+    target: {entity_id: assist_satellite.asterisk_local}
+```
+
+and the dialplan **alternates** which phone each call reaches:
 
 ```
-exten => asterisk,1,Set(TIMEOUT(absolute)=8)
- same => n,Page(PJSIP/yealink&PJSIP/yealink2,qb(intercom^s^1))
+exten => asterisk,1,GotoIf($["${GLOBAL(HA_PHONE)}" = "yealink2"]?y2)
+ same => n,Set(GLOBAL(HA_PHONE)=yealink2)
+ same => n,Dial(PJSIP/yealink,30,S(6)b(intercom^s^1))
  same => n,HangUp()
+ same => n(y2),Set(GLOBAL(HA_PHONE)=yealink)
+ same => n,Dial(PJSIP/yealink2,30,S(6)b(intercom^s^1))
+ same => n,HangUp()
+exten => _X.,1,Goto(asterisk,1)
 ```
 
-- `q` suppresses Page's beep — without it you get
-  `Unable to open beep (format (opus))`.
-- `TIMEOUT(absolute)` caps the call: `Page` has no `S(x)` like `Dial`, and HA's
-  satellite never ends the call itself. **It is a duration in seconds, not an
-  epoch** — `$[${EPOCH}+8]` looks right but never fires, and the call hangs open.
-- A plain `Dial(A&B)` also "works" but connects only the **first** phone to
-  answer — use it only for a *ring group*, not a page.
+The phones announce a few seconds apart, each with the full message.
 
-### Prerequisite: codec_opus (Page must mix opus↔slin)
+### Do NOT use `Page()`/`ConfBridge` here
 
-Page/ConfBridge transcode to `slin` to mix. A stock Asterisk ships only
-`res_format_attr_opus` (passthrough), so Page dies silently with
-`No translator path (slin)->(opus)`. Verify:
+It looks tempting — `Page` bridges every answering phone into one conference so
+both play at once — and it briefly works, but three fatal problems:
+
+1. **It clips the announcement.** `Page` answers the caller up-front, so HA's
+   TTS starts before the phones have joined; the first ~1s is lost.
+2. **`TIMEOUT(absolute)` does not fire inside `ConfBridge`.** The call hangs
+   open and the phones are left **off the hook**. (`Page` has no `S(x)` like
+   `Dial`. And `TIMEOUT(absolute)` is a duration in seconds, not an epoch —
+   `$[${EPOCH}+8]` silently never fires.)
+3. **It deadlocked this PBX.** Channels stopped answering hangup requests and
+   only a full restart cleared them. `Page` also needs `codec_opus` to transcode
+   opus↔slin for mixing — extra machinery for a method you should avoid anyway.
+
+A plain `Dial()` has none of these: the caller is answered only when the phone
+answers (no clip) and `S(x)` is a reliable hangup.
+
+### Aside: opus ↔ slin transcoding (only needed for conferences)
+
+If you *do* want `Page`/`ConfBridge`/`MeetMe` for something else, mixing needs
+an opus translator, which a stock Asterisk lacks (only `res_format_attr_opus`,
+passthrough):
 
 ```bash
-asterisk -rx 'core show translation paths opus'   # all "No Translation Path" = broken
+asterisk -rx 'core show translation paths opus'   # all "No Translation Path" = missing
 ```
 
-Install the official Digium module (Asterisk 22 example):
+Install the Digium module (Asterisk 22 shown), then **restart** — Asterisk reads
+third-party XML docs only at startup, so `xmldoc reload` won't pick it up:
 
 ```bash
 cd /tmp
 curl -sLO https://downloads.digium.com/pub/telephony/codec_opus/asterisk-22.0/x86-64/codec_opus-22.0-current-x86_64.tar.gz
 tar -xzf codec_opus-22.0-current-x86_64.tar.gz
-cp codec_opus-22.0_*/codec_opus.so                       /usr/lib/asterisk/modules/
-cp codec_opus-22.0_*/codec_opus_config-en_US.xml         /var/lib/asterisk/documentation/thirdparty/
+cp codec_opus-22.0_*/codec_opus.so               /usr/lib/asterisk/modules/
+cp codec_opus-22.0_*/codec_opus_config-en_US.xml /var/lib/asterisk/documentation/thirdparty/
 systemctl restart asterisk
 ```
-
-**The restart is required.** Asterisk reads third-party XML docs only at
-startup — `xmldoc reload` will *not* pick up a newly added file, and without it
-the module fails with `Could not obtain XML documentation item for config type
-opus`. The prebuilt module's ABI matches a source-built 22.x (it reaches module
-init), so no rebuild is needed.
 
 Watch the LSB init script: `systemctl restart asterisk` can report success while
 the old daemon survives (`Unit process NNN remains running after unit stopped`)
